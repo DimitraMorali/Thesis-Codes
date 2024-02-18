@@ -1,0 +1,168 @@
+#################################################################################################
+rm(list=ls(all=T))
+par(mar=c(3.5,3.5,1.5,1.5),mgp=c(2.4,0.8,0)) 
+#################################################################################################
+
+gammamix <- function(n,pi,a,b){
+  sam <- sample(1:length(pi),prob=pi,size=n,replace=TRUE)
+  x <- rgamma(n,a[sam],rate = b[sam])
+  return(x)
+}
+
+
+DPMM <- function(x,iter,burnin=0){
+  n<-length(x)
+  d<-1:n
+  c<-1
+  ac<-bc<-0.1
+  a0<-b0<-0.1
+  mu0 <- 0
+  prec0 <- 0.1
+  u <- numeric(n)
+
+  preds <- numeric(iter - burnin)
+  ucl <- numeric(iter - burnin)
+  mu <- rep(1, max(d))
+  prec <- rep(1, max(d))
+
+  for(i in 1:iter){
+    
+    if (i %% 1000 == 0) print(i)
+    
+    D <- max(d)
+    v <- numeric(D)
+    w <- numeric(D)
+    
+    #sample weights
+    for(j in 1:D){
+      v[j] <-rbeta(1, 1+sum(d==j), c+sum(d>j))
+    }
+    
+    w[1] = v[1]
+    if (D > 1){
+      for (j in 2:D){
+        w[j] <- w[j - 1] * v[j] * (1 - v[j - 1]) / v[j - 1]
+      }
+    }
+
+    #sample the ui's
+    for(j in 1:n){
+      u[j] <- runif(1,0,w[d[j]])
+    }
+    
+    mu <- numeric(D)
+    #locations from posterior
+    for(t in 1:D){
+      nj <- sum(d == t)
+      aj <- sum(x[d == t])
+      
+      mustar <- (mu0*prec0 + prec[t] * aj) / (prec0 + prec[t]*nj)
+      sigmastar <- 1 / (prec0 + prec[t]*nj)
+      mu[t] <- rnorm(1, mustar, sqrt(sigmastar))
+      
+      sj2 <- 0
+      for (j in 1:n){
+        if (d[j] == t){
+          sj2 <- sj2 + (x[j] - mu[t])^2 
+        }
+      }
+      prec[t] <- rgamma(1, a0 + 0.5 * nj,  rate = (b0 + 0.5 * sj2))
+    }
+    
+    counts <- 0
+    Dstar <- 0
+    while (sum(w) < 1-min(u)){
+      counts <- counts+1
+      Dstar <- D + counts
+      
+      #additional weights and locations
+      v <- c(v, rbeta(1,1,c))
+      w <- c(w, w[Dstar - 1] * v[Dstar] * (1 - v[Dstar - 1]) / v[Dstar - 1])
+      mustar <- rnorm(1, mu0,1/sqrt(prec0))
+      precstar <- rgamma(1, a0, rate =  b0)
+      mu <- c(mu, mustar)
+      prec <- c(prec,precstar)
+    }
+
+    #sample the di's
+    for(t in 1:n){
+      Ai <- which(u[t] < w)
+      logprobs = numeric(length(Ai))
+      for (j in 1:length(Ai)){
+        logprobs[j] = dnorm(x[t], mu[Ai[j]], sqrt(1 / prec[Ai[j]]), log=TRUE) 
+      }
+      probs = exp(logprobs - max(logprobs))
+      probs = probs / sum(probs)
+      cmp = sample(1:length(Ai), size=1, prob=probs)
+      d[t] = Ai[cmp]
+    }
+    
+    #concentration parameter
+    l <- length(unique(d))
+    s <- rbeta(1,c+1,n)
+    rho <- (ac+l-1)/(n*(bc-log(s))+ac+l-1)
+    c <- gammamix(1, pi=c(rho,1-rho), a=c(ac+l,ac+l-1), b=c((bc-log(s)), (bc-log(s))))
+    
+    # density estimation
+    u1 <- runif(1)
+    W <- cumsum(w)
+    
+    if (u1 > W[length(w)]){ # draw from the prior
+      xpred <- rnorm(1,rnorm(1,mu0,sqrt(1/prec0)),1/sqrt(rgamma(1,a0,rate=b0)))
+    } else {
+      for (t in 1:length(W)){
+        if (u1 <= W[t]){ # randomly choose component
+          xpred <- rnorm(1, mu[t], 1 / sqrt(prec[t]))
+          break
+        }       
+      }
+    }
+    
+    if (i > burnin){
+      preds[i - burnin] <- xpred
+      ucl[i - burnin] <- length(unique(d))
+    }
+    
+    if (max(d) > length(prec)){
+      prec <- c(prec, rep(1, max(d) - length(prec)))
+    }
+  }
+  return(data.frame(preds = preds, ucl = ucl))
+}
+
+rmix <- function(n,pi,mu,s){
+  z <- sample(1:length(pi),prob=pi,size=n,replace=TRUE)
+  x <- rnorm(n,mu[z],s[z])
+  return(x)
+}
+
+filter.data <- function(sample, lower, upper){
+  sample = sample[(sample > lower) & (sample < upper)]
+  return(sample[!is.na(sample)])
+}
+
+#data
+set.seed(1312)
+mus <- c(-4,0,8)
+sds <- rep(1,3)
+ws <- rep(1/3,3)
+data <- rmix(n=50,pi=ws,mu=mus,s=sds)
+
+
+try1 <- DPMM(data,iter=20000,burnin=5000)
+
+fhat = filter.data(try1$preds, -10, 10)
+xs <- seq(-30,30,length.out=1000)
+ys <- 1/3*(dnorm(xs, mus[1], sds[1]) + dnorm(xs, mus[2], sds[2]) + dnorm(xs, mus[3], sds[3]))
+
+
+#plots
+par(mfrow=c(1,2))
+hist(fhat, freq=F, col="beige", breaks=50, ylab = 'Πυκνότητα', xlab = 'Δείγμα', main='Ιστόγραμμα')
+lines(xs,ys,col="red",lwd=2)
+##
+plot(cumsum(try1$ucl) / seq(1:length(try1$ucl)), type="l", ylab="Κινούμεσος μέσος αριθμού κλάσεων", ylim=c(0,5), xlab = 'Επανάληψη')
+#############################
+par(mfrow=c(1,1))
+
+
