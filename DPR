@@ -1,0 +1,288 @@
+#################################################################################################
+rm(list=ls(all=T))
+par(mar=c(3.5,3.5,1.5,1.5),mgp=c(2.4,0.8,0)) 
+#################################################################################################
+
+gammamix <- function(n,pi,a,b){
+  sam <- sample(1:length(pi),prob=pi,size=n,replace=TRUE)
+  x <- rgamma(n,a[sam],rate= b[sam])
+  return(x)
+}
+
+map <- function(theta,x){
+  return(1-theta*x^2)
+}
+
+
+
+c.update <- function(ac, bc, c, n, l){
+  
+  s <- rbeta(1,c+1,n)
+  rho <- (ac + l - 1)/(n*(bc - log(s)) + ac +l -1)
+  cup <- gammamix(1, pi = c(rho, 1-rho), a = c(ac + l, ac +l -1), b = c(bc - log(s), bc - log(s)))
+  return(cup)
+}
+
+umix <- function(n,pi,a,b){
+  z <- sample(1:length(pi),prob=pi,size=n,replace=TRUE)
+  x <- runif(n,a[z],b[z])
+  return(x)
+}
+
+#### model #####
+DPR <- function(x, iter, burnin=0, thetabounds, seed=1){
+  set.seed(seed)
+  n <- length(x)
+  ac <- bc <- 0.1
+  a0 <- b0 <- 0.01
+  x0.cur <- 0.5
+  theta.cur <- 1
+  d <- 1:n
+  c <- 1
+  
+  u <- numeric(n)
+  theta.draws <- numeric(iter - burnin)
+  x0.draws <- numeric(iter - burnin)
+  ucl <- numeric(iter - burnin)
+  preds <- numeric(iter - burnin)
+  prec <- rep(1, max(d))
+  
+  
+  for(i in 1:iter){
+    
+    if (i %% 1000 == 0) print(i)
+    
+    D <- max(d)
+    v <- w <- numeric(D)
+    
+    #sample the weights
+    for(j in 1:D){
+      v[j] <- rbeta(1, 1 + sum(d==j), c + sum(d > j))
+    }
+    w[1] <- v[1]
+    
+    if(D >1){
+      for(j in 2:D){
+        
+        w[j] <- w[j-1]*v[j]*(1-v[j-1])/v[j-1]
+      }
+    }
+    
+    #sample ui's
+    for(j in 1:n){
+      u[j] <- runif(1, 0, w[d[j]])
+    }
+    
+    #sample precisions
+    for(j in 1:D){
+      counts <- term <- 0
+      if(d[1]==j){
+        counts <- counts +1
+        term <- term + (x[1]-map(theta.cur,x0.cur))^2
+      }
+      for(k in 2:n){
+        if(d[k]==j){
+          counts <- counts +1
+          term <- term + (x[k] - map(theta.cur,x[k-1]))^2
+        }
+      }
+      prec[j] <- rgamma(1, a0 + counts/2, rate = (b0 + term/2))
+    }
+    
+    #sample additional weights and precisions
+    counts1 <- Dstar <- 0
+    while(sum(w) < 1-min(u)){
+      counts1 <- counts1 +1
+      Dstar <- D + counts1
+      
+      v <- c(v, rbeta(1,1,c))
+      wstar <- w[Dstar -1]*v[Dstar]*(1-v[Dstar-1])/v[Dstar -1]
+      w <- c(w, wstar)
+      precstar <- rgamma(1, a0, rate = b0)
+      prec <- c(prec, precstar)
+    }
+    
+    #sample di's
+    nc0 <- 0
+    A1 <- which(u[1] < w)
+    for(j in 1:length(A1)){
+      nc0 <- nc0 + sqrt(prec[A1[j]])*exp(-prec[A1[j]]/2*(x[1]- map(theta.cur,x0.cur))^2)
+    }
+    
+    rd0 <- runif(1)
+    prob0 <- 0
+    
+    for(j in 1:length(A1)){
+      prob0 <- prob0 + sqrt(prec[A1[j]])*exp(-prec[A1[j]]/2*(x[1]- map(theta.cur,x0.cur))^2)/nc0
+      if(rd0 < prob0){
+        d[1] <- A1[j]
+        break
+      }
+    }
+    
+    for(k in 2:n){
+      Ai <- which(u[k] < w)
+      nc <- 0
+      for(j in 1:length(Ai)){
+        nc <- nc + sqrt(prec[Ai[j]])*exp(-prec[Ai[j]]/2*(x[k] - map(theta.cur,x[k-1]))^2)
+      }
+      prob <- 0
+      rd <- runif(1)
+      for(j in 1:length(Ai)){
+        prob <- prob + sqrt(prec[Ai[j]])*exp(-prec[Ai[j]]/2*(x[k] - map(theta.cur,x[k-1]))^2)/nc
+        if(rd < prob){
+          d[k] <- Ai[j] 
+          break
+        }
+      }
+      
+    }
+    #update c
+    c <- c.update(ac, bc, c, n, length(unique(d)))
+    
+    #denisty estimation
+    u1 <- runif(1)
+    W <- cumsum(w)
+    
+    if(u1 > W[length(w)]){
+      xpred <- rnorm(1, 0, sqrt(1/rgamma(1, a0, rate = b0))) 
+    }
+    else{
+      for(j in 1:length(W)){
+        if(u1 <= W[j]){
+          xpred <- rnorm(1, 0, sqrt(1/prec[j])) 
+          break
+        }
+      }
+    }
+    
+    #update theta
+    q <- as <- bs <- numeric(n)
+    q[1] <- -2/prec[d[1]]*log(runif(1)) + (x[1] - map(theta.cur,x0.cur))^2
+    as[1] <- (1 - x[1] - sqrt(q[1]))/(x0.cur^2)
+    bs[1] <- (1 - x[1] + sqrt(q[1]))/(x0.cur^2)
+    for(j in 2:n){
+      q[j] <- -2/prec[d[j]]*log(runif(1)) + (x[j] - map(theta.cur,x[j-1]))^2
+      as[j] <- (1 - x[j] - sqrt(q[j]))/(x[j-1]^2)
+      bs[j] <- (1 - x[j] + sqrt(q[j]))/(x[j-1]^2)
+    }
+    amax <- max(as)
+    bmin <- min(bs)
+    
+    theta.cur <- runif(1, max(amax,0), min(bmin,2))
+    
+    #update x0
+    r1 <- (1-sqrt(q[1])-x[1])/theta.cur
+    r2 <-(1+sqrt(q[1])-x[1])/theta.cur
+    if(r1 < 0){
+      if(r2 >= 4){
+        x0.cur <- runif(1,-2,2)
+      }
+      else{
+        x0.cur <- runif(1, -sqrt(r2), sqrt(r2))
+      }
+    }
+    else{
+      if(r2 >= 4){
+        x0.cur <- umix(1, c(1/2,1/2), c(-2,sqrt(r1)), c(-sqrt(r1),2))
+          
+      }
+      else{
+        x0.cur <- - umix(1,c(1/2,1/2), c(-sqrt(r2),sqrt(r1)), c(-sqrt(r1),sqrt(r2)) )
+          
+      }
+    }
+    
+    if(i > burnin){
+      theta.draws[i - burnin] <- theta.cur
+      x0.draws[i - burnin] <- x0.cur
+      ucl[i - burnin] <- length(unique(d))
+      preds[i - burnin] <- xpred
+    }
+  }
+  return(list(thetas = theta.draws, x0s = x0.draws,clusters = ucl,pred = preds))
+  
+}
+
+### data ###
+rmix <- function(n,pi,mu,s){
+  z <- sample(1:length(pi),prob=pi,size=n,replace=TRUE)
+  x <- rnorm(n,mu[z],s[z])
+  return(x)
+}
+p <- c(0.75, 0.25)
+mus <- rep(0,2)
+sds <- c(0.001,sqrt(0.001))
+noisy_orbit <- function(n,theta,x0, pr, mu, s){
+  x <- numeric(n)
+  x[1] <- 1-theta*x0^2 + rmix(n=1,pr,mu,s)
+  for (i in 2:n) x[i] <- 1-theta*x[i-1]^2 + rmix(1,pr,mu,s)
+  return(x)
+}
+
+set.seed(5876)
+data <- noisy_orbit(500, theta =1.71, x0 = 0.5, p, mus, sds)
+plot(data, type='l', xlab='t', ylab=expression(x[t]),cex.lab=1.8, main='Τροχιά δυναμικού συστήματος')
+
+#############
+est1 <- DPR(data, iter=40000, burnin=20000, thetabounds= c(0,2), seed=587)
+#############
+
+filter.data <- function(sample, lower, upper){
+  sample = sample[(sample > lower) & (sample < upper)]
+  return(sample[!is.na(sample)])
+}
+
+fhat <- filter.data(est1$pred, -0.5, 0.5)
+
+mode <- function(v) {
+  uniqv <- unique(v)
+  uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+#theta,x0 estimations
+mean(est1$thetas)
+mode(est1$x0s)
+
+########### PLOTS ##########
+par(mfrow=c(1,2))
+
+#histograms
+hist(est1$thetas,probability = TRUE,breaks = 50,col="goldenrod",border="goldenrod",ylab = 'Πυκνότητα', xlab = expression(theta), main='Ιστόγραμμα θ')
+abline(v=1.71,col="darkviolet",lwd=2)
+hist(est1$x0s,probability = TRUE, breaks=50,col="goldenrod",border="goldenrod",ylab = 'Πυκνότητα', xlab = expression(x[0]), main=expression(paste("Ιστόγραμμα ",x[0])))
+abline(v=0.5,col="darkviolet",lwd=2)
+
+
+#running average
+par(mfrow = c(1,3))
+plot(cumsum(est1$thetas)/seq(1,length(est1$thetas)),lwd=2,type='l',ylab = 'Κινούμεσος μέσος για το θ', xlab = 'Επανάληψη',cex.lab=1.8,cex.axis=2)
+plot(est1$x0s, type='l', ylab=expression(x[0]), xlab='Επανάληψη',cex.lab=1.8,cex.axis=2)
+abline(h=0.5, col='red', lwd=2)
+plot(cumsum(est1$clusters) / seq(1:length(est1$clusters)), type="l", ylab="Κινούμεσος μέσος αριθμού κλάσεων", ylim=c(0,5), xlab = 'Επανάληψη',cex.lab=1.8,cex.axis=2)
+par(mfrow=c(1,1))
+
+#noise prediction
+par(mfrow=c(1,2))
+xs <- seq(-0.5,0.5,length.out=1000)
+ys <- 0.75*dnorm(xs, mus[1], sds[1]) + 0.25*dnorm(xs, mus[2], sds[2]) 
+hist(fhat, probability = TRUE, col="beige", breaks=60, ylab = 'Πυκνότητα', xlab = 'Δείγμα',xlim=c(-0.2,0.2),main='')
+lines(xs,ys,col="red",lwd=2)
+
+plot(h$mids, log(h$density),type='l',lwd=2.5,xlim=c(-0.15,0.15),ylim=c(-4,4), ylab='Λογάριθμος Πυκνότητας',xlab='Κέντρα')
+lines(xs,log(ys),col='blue',lwd=2.5)
+lines(xs, dnorm(xs, 0, sqrt(0.75*sds[1]^2 + 0.25*sds[2]^2), log=TRUE),col='red', lwd=2.5)
+
+par(mfrow=c(1,1))
+
+
+##### PARE #####
+x0true <- 0.5
+x0est <- mode(est1$x0s)
+PAREx0 <- 100*abs(x0true-x0est)/abs(x0true)
+PAREx0
+
+thetatrue <- 1.71
+thetaest <- mean(est1$thetas)
+PAREtheta <- 100*abs(thetatrue - thetaest)/abs(thetatrue)
+PAREtheta
