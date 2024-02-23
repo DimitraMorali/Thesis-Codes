@@ -262,18 +262,26 @@ abline(h=0.5, col='red', lwd=2)
 plot(cumsum(est1$clusters) / seq(1:length(est1$clusters)), type="l", ylab="Κινούμεσος μέσος αριθμού κλάσεων", ylim=c(0,5), xlab = 'Επανάληψη',cex.lab=1.8,cex.axis=2)
 par(mfrow=c(1,1))
 
+h <- hist(fhat, probability = TRUE, col="beige", breaks=100, ylab = 'Πυκνότητα', xlab = 'Δείγμα',xlim=c(-0.2,0.2),main='')
+
 #noise prediction
 par(mfrow=c(1,2))
 xs <- seq(-0.5,0.5,length.out=1000)
 ys <- 0.75*dnorm(xs, mus[1], sds[1]) + 0.25*dnorm(xs, mus[2], sds[2]) 
-hist(fhat, probability = TRUE, col="beige", breaks=60, ylab = 'Πυκνότητα', xlab = 'Δείγμα',xlim=c(-0.2,0.2),main='')
+hist(fhat, probability = TRUE, col="beige", breaks=100, ylab = 'Πυκνότητα',xlim=c(-0.2,0.2),xlab = 'Δείγμα',main='')
 lines(xs,ys,col="red",lwd=2)
 
-plot(h$mids, log(h$density),type='l',lwd=2.5,xlim=c(-0.15,0.15),ylim=c(-4,4), ylab='Λογάριθμος Πυκνότητας',xlab='Κέντρα')
-lines(xs,log(ys),col='blue',lwd=2.5)
-lines(xs, dnorm(xs, 0, sqrt(0.75*sds[1]^2 + 0.25*sds[2]^2), log=TRUE),col='red', lwd=2.5)
+legend("topright", legend = c("Εκτιμώμενη πυκνότητα", "Θεωρητική πυκνότητα"), fill = c("beige", NA), border=c("black",NA),col = c(NA, "red"), lwd = c(NA, 2),cex=0.7, text.font = 2.5)
+
+
+plot(h$mids, log(h$density), type="o", pch=19,lwd=2.5,xlim=c(-0.15,0.15),ylim=c(-4,4), ylab='Λογάριθμος Πυκνότητας',xlab='Δείγμα')
+lines(xs,log(ys),col='red',lwd=2.5)
+lines(xs, dnorm(xs, 0, sqrt(0.75*sds[1]^2 + 0.25*sds[2]^2), log=TRUE),col='blue', lwd=2.5)
+legend("topright", legend=c("Εκτιμώμενη πυκνότητα", "Θεωρητική πυκνότητα", expression(paste("Πυκνότητα Ν(0,",sigma^2,")"))),
+       col=c("black", "red", "blue"), lty=1, cex=0.7, text.font = 2.5)
 
 par(mfrow=c(1,1))
+
 
 
 ##### PARE #####
@@ -286,3 +294,4 @@ thetatrue <- 1.71
 thetaest <- mean(est1$thetas)
 PAREtheta <- 100*abs(thetatrue - thetaest)/abs(thetatrue)
 PAREtheta
+
