@@ -1,4 +1,4 @@
-R codes used in my thesis with title "Bayesian Non Parametric Inference on Stochastic Dynamical Systems", for the master's degree in Statistics and Data Analysis.
+R codes used in my thesis with title "Bayesian Non Parametric Inference on Stochastic Dynamical Systems" for my master's degree in Statistics and Data Analysis.
 
 Specifically,
 
